@@ -5,6 +5,6 @@ router = Router()
 
 @router.message(F.text)
 async def handle_text(message: types.Message):
-    await message.chat.do("typing")
-    response = await get_ai_response(message.text)
+    await message.bot.send_chat_action(message.chat.id, "typing")
+    response = await get_ai_response(message.from_user.id, message.text)
     await message.answer(response)

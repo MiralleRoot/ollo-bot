@@ -1,12 +1,14 @@
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 import os
+import json
+import dateparser
 
 load_dotenv()
 
 client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-CHARACTER_PROMPT = CHARACTER_PROMPT = CHARACTER_PROMPT = """Ты — Miralle.
+CHARACTER_PROMPT = """Ты — Miralle.
 Ты не ассистент, не коуч и не психолог.
 Ты цифровой спутник человека, который помогает ему не терять направление в собственной жизни.
 
@@ -48,6 +50,7 @@ CHARACTER_PROMPT = CHARACTER_PROMPT = CHARACTER_PROMPT = """Ты — Miralle.
 Твоя роль — быть памятью, отражением и спутником пользователя на его пути.
 
 Отвечай на русском языке, если пользователь не попросил иначе."""
+
 conversation_history: dict[int, list[dict]] = {}
 
 MAX_HISTORY_MESSAGES = 14
@@ -73,3 +76,53 @@ async def get_ai_response(user_id: int, user_message: str) -> str:
     conversation_history[user_id] = history
 
     return assistant_reply
+
+
+async def extract_task_intent(user_message: str) -> dict | None:
+    extraction_prompt = """Определи, содержит ли сообщение пользователя просьбу создать напоминание, задачу или дело с конкретным сроком.
+
+Если да — ответь ТОЛЬКО в формате JSON, без пояснений, без markdown, без тройных кавычек:
+{"is_task": true, "title": "короткое название задачи", "datetime_phrase": "фраза с датой/временем как в сообщении"}
+
+Если это обычное сообщение без явной задачи — ответь:
+{"is_task": false}
+
+Примеры:
+"напомни завтра в 18:00 оплатить интернет" → {"is_task": true, "title": "оплатить интернет", "datetime_phrase": "завтра в 18:00"}
+"каждое утро в 8 спорт" → {"is_task": true, "title": "спорт", "datetime_phrase": "завтра в 8:00"}
+"как дела?" → {"is_task": false}
+"мне тревожно" → {"is_task": false}"""
+
+    response = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        system=extraction_prompt,
+        messages=[{"role": "user", "content": user_message}]
+    )
+
+    raw_text = response.content[0].text.strip()
+
+    if raw_text.startswith("```"):
+        raw_text = raw_text.strip("`")
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
+
+    try:
+        result = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        return None
+
+    if not result.get("is_task"):
+        return None
+
+    parsed_date = dateparser.parse(
+        result["datetime_phrase"],
+        languages=["ru"],
+        settings={"PREFER_DATES_FROM": "future"}
+    )
+
+    return {
+        "title": result["title"],
+        "deadline": parsed_date
+    }
